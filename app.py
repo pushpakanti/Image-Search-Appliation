@@ -1,6 +1,8 @@
 import streamlit as st
 import sys
 import time
+from PIL import image, ImageDraw, ImageFont
+import base64
 from pathlib import Path
 from src.inference import YOLOv11Inference
 from src.utils import save_metadata, load_metadata, get_unique_classes_counts
@@ -11,8 +13,18 @@ def init_session_state():
     session_defaults={
         "metadata":None,
         "unique_classes": [],
-        "count_options": {}
-    }
+        "search_results": [],
+        "count_options": {},
+        "search_params":{
+            "search_mode":"Any of selected classes (OR)",
+            "selected_classes": [],
+            "thresholds": {}
+        },
+         "show_boxes": True,
+         "grid_columns": 3,
+         "highlight_matces": True
+        }
+
 
     for key, value in session_defaults.items():
         if key not in st.session_state:
@@ -63,9 +75,147 @@ else:
                     with st.spinner("Loading Metadata..."):
                         metadata= load_metadata(metadata_path)
                         st.session_state.metadata= metadata
-                        st.session_state.unique_classes, st.session_state.count_options
+                        st.session_state.unique_classes, st.session_state.count_options = get_unique_classes_counts(metadata)
                         st.success(f" Successfully loaded Metadata for {len(metadata)} images..")
                 except Exception as e:
                     st.error(f"Error loading metadata: {str(e)}")
         else:
             st.warning(f"Please enter a metadata file path")
+
+if st.session_state.metadata:
+    st.header("Search Engine")
+
+    with st.container():
+        st.session_state.search_params["search_mode"]= st.radio("Search mode:",
+                 ("Any of selected classes (OR)", "All selected classes(AND)"),
+                 horizontal=True
+        )
+
+        st.session_state.search_params["selected_classes"]= st.multiselect(
+            "Classes to search for:",
+            options= st.session_state.unique_classes
+        )
+
+        if st.session_state.search_params["selected_classes"]:
+            st.subheader("Count Thresholds (optional)")
+            cols= st.columns(len(st.session_state.search_params["selected_classes"]))
+            for i, cls in enumerate(st.session_state.search_params["selected_classes"]):
+                with cols[i]:
+                    st.session_state.search_params["thresholds"][cls]= st.selectbox(
+                        f"Max count for {cls}",
+                        options=["None"]+st.session_state.count_options[cls]  
+                    )
+
+        if st.button("Search Images", type="primary") and st.session_state.search_params["selected_classes"]:
+            results=[]
+            search_params= st.session_state.search_params
+
+            for item in st.session_state.metadata:
+                matches= False
+                class_matches= {}
+
+                for cls in search_params["selected_classes"]:
+                    class_detections= [d for d in item['detections'] if d['class']== cls]
+                    class_count= len(class_detections)
+                    class_matches[cls]= False
+
+                    threshold= search_params['thresholds'].get(cls, "None")
+                    if threshold=="None":
+                        class_matches[cls]= (class_count>=1)
+                    else:
+                        class_matches[cls]= (class_count>=1 and class_count<= int(threshold))
+
+                if search_params["search_mode"]=="Any of selected classes (OR)":
+                    matches = any(class_matches.values())
+                else:
+                    matches = all(class_matches.values())
+
+
+                if matches:
+                    results.append(item)
+
+            st.session_state.search_results= results
+
+
+# Displaying result
+if st.session_state.search_results:
+    results= st.session_state.search_results
+    search_params= st.session_state.search_params
+
+    st.subheader(f" Results: {len(results)} matching images")
+
+    #Display controls
+    with st.expander("Display Options: ", expanded= True):
+        cols= st.columns(3)
+        with cols[0]:
+            st.session_state.show_boxes= st.checkbox(
+                "Show bounding boxes",
+                value= st.session_state.show_boxes 
+            )
+        with cols[1]:
+            st.session_state.grid_columns= st.slider(
+                "Grid Columns",
+                min_value=2,
+                max_value=6,
+                value=st.select_state.grid_columns
+            )
+        with cols[2]:
+            st.session_state.highlight_matches= st.checkbox(
+                "Highlight matching classes",
+                value= st.session_state.highlight_matches
+
+            )
+
+# creating grid
+    grid_cols= st.columns(st.session_state.grid_columns)
+    col_index=0
+
+    for result in results:
+        with grid_cols[col_index]:
+            try:
+                img= Image.open(result["image_path"])
+                draw=ImaegDraw(img)
+
+                if st.session_state.show_boxes:
+                    try:
+                        font= ImageFont.truetype("arial.ttf", 12)
+                    except:
+                        font= ImageFont.load_default()
+                for det in result ['detections']:
+                    cls= det['class']
+                    bbox= det['box']
+
+                    if cls in search_params["selected_classes"]:
+                        color= "#1222D0"
+                    elif not st.session_state.highlight_matches:
+                        color="#579612"
+                        thickess= 1
+                    else:
+                        continue
+
+                    draw.rectangle(bbox, outline=color, width=thickess)
+
+                    if cls in search_params["selected_classes"] or not st.session_state.highlight_matches:
+                        label= f"{cls} {det['confidence']:.2f}"
+                        text_bbox= draw.textbox((0,0), label, font=font)
+                        text_width= text_bbox[2] - text_bbox[0]
+                        text_height= text_bbox[3] - text_bbox[1]
+
+                        draw.rectangle([bbox[0],bbox[1], bbox[0]+ text_width+8, bbox[1], text_height+4]
+                                       ,fill=color)
+                        
+                        draw.text(
+                            (bbox[0]+4, bbox[1]+2),
+                            label,
+                            fill='white',
+                            font=font
+                        )
+                        
+
+                        
+
+
+
+            except Exception as e:
+                st.error(f"Error displaying {result["image_path"]}: {str(e)}")
+                
