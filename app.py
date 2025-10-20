@@ -1,9 +1,12 @@
 import streamlit as st
 import sys
 import time
+import json
 from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from src.inference import YOLOv11Inference
 from src.utils import save_metadata, load_metadata, get_unique_classes_counts
@@ -42,63 +45,6 @@ init_session_state()
 st.set_page_config(page_title="YOLOv11 Image Search App", layout="wide")
 st.title("Object Search Application using Computer Vision")
 
-# Custom CSS for perfect grid layout
-st.markdown(f"""
-<style>
-/* Main container adjustments */
-.st-emotion-cache-1v0mbdj {{
-    width: 100% !important;
-    height: 100% !important;
-}}
-
-/* Column container - critical for grid layout */
-.st-emotion-cache-1wrcr25 {{
-    max-width: none !important;
-    padding: 0 1rem !important;
-}}
-
-/* Individual column styling */
-.st-emotion-cache-1n76uvr {{
-    padding: 0.5rem !important;
-}}
-
-/* Image cards */
-.image-card {{
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-    margin-bottom: 20px;
-    background: #f8f9fa;
-}}
-
-.image-card:hover {{
-    transform: translateY(-3px);
-    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
-}}
-
-.image-container {{
-    position: relative;
-    width: 100%;
-    aspect-ratio: 4/3;
-}}
-
-.image-container img {{
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}}
-
-.meta-overlay {{
-    padding: 10px;
-    background: rgba(0,0,0,0.85);
-    color: white;
-    font-size: 13px;
-    line-height: 1.4;
-}}
-</style>
-""", unsafe_allow_html=True)
-
 
 ##  options--
 option= st.radio("Choose an option: ",
@@ -109,7 +55,7 @@ if option== "Process new images":
     with st.expander("process new images", expanded=True):
         col1, col2= st.columns(2)
         with col1:
-            image_dir= st.text_input("Image directory path: ", placeholder="path/to")
+            image_dir= st.text_input("Image directory path: ", placeholder="enter the path")
         with col2:
             model_path= st.text_input("Model weights path: ", "yolo11m.pt")
 
@@ -120,7 +66,7 @@ if option== "Process new images":
                         inferencer=YOLOv11Inference(model_path)
                         metadata= inferencer.process_directory(image_dir)
                         metadata_path= save_metadata(metadata, image_dir)                   
-                        st.success(f"Processed {len(metadata)} images. Metadata saved to: ")
+                        st.success(f"Processed all images. Metadata saved ")
                         st.code(str(metadata_path))
                         st.session_state.metadata=metadata
                         st.session_state.unique_classes, st.session_state.count_options= get_unique_classes_counts(metadata)
@@ -140,7 +86,7 @@ else:
                         metadata= load_metadata(metadata_path)
                         st.session_state.metadata= metadata
                         st.session_state.unique_classes, st.session_state.count_options = get_unique_classes_counts(metadata)
-                        st.success(f" Successfully loaded Metadata for {len(metadata)} images..")
+                        st.success(f" Successfully loaded Metadata for given images..")
                 except Exception as e:
                     st.error(f"Error loading metadata: {str(e)}")
         else:
@@ -300,3 +246,55 @@ if st.session_state.search_results:
                     st.error(f"Error displaying {result['image_path']}: {str(e)}")
                 
         col_index= (col_index+1) % st.session_state.grid_columns
+
+    with st.expander("Export Options"):
+        st.download_button(
+            label= "Download Results (JSON)",
+            data= json.dumps(results, indent=2),
+            file_name="search_results.json",
+            mime="application/json"
+        )
+
+        # Option to include annotated images in a zip
+        include_annotated = st.checkbox("Include images (annotated with boxes)", value=True)
+
+        def create_images_zip(results_list, annotated=True):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for res in results_list:
+                    try:
+                        img = Image.open(res["image_path"]).convert("RGB")
+                        if annotated:
+                            draw = ImageDraw.Draw(img)
+                            try:
+                                font = ImageFont.truetype("arial.ttf", 12)
+                            except Exception:
+                                font = ImageFont.load_default()
+                            for det in res.get('detections', []):
+                                bbox = det.get('bbox')
+                                cls = det.get('class', '')
+                                color = "#1222D0" if cls in st.session_state.search_params["selected_classes"] else "#579612"
+                                draw.rectangle(bbox, outline=color, width=2)
+                                label = f"{cls} {det.get('confidence',0):.2f}"
+                                text_bbox = draw.textbbox((0,0), label, font=font)
+                                text_w = text_bbox[2] - text_bbox[0]
+                                text_h = text_bbox[3] - text_bbox[1]
+                                draw.rectangle([bbox[0], bbox[1], bbox[0] + text_w + 8, bbox[1] + text_h + 4], fill=color)
+                                draw.text((bbox[0]+4, bbox[1]+2), label, fill='white', font=font)
+
+                        img_buffer = io.BytesIO()
+                        img.save(img_buffer, format="PNG")
+                        img_buffer.seek(0)                      
+                        filename = Path(res["image_path"]).name
+                        zf.writestr(filename, img_buffer.read())
+                    except Exception as e:
+                        print(f"Skipping {res.get('image_path')}: {e}")
+            buffer.seek(0)
+            return buffer
+
+        zip_button_label = f"Download Images (ZIP) - {datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        if st.download_button(label=zip_button_label,
+                              data=create_images_zip(results, annotated=include_annotated),
+                              file_name="matched_images.zip",
+                              mime="application/zip"):
+            st.success("ZIP prepared for download")
