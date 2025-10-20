@@ -1,13 +1,20 @@
 import streamlit as st
 import sys
 import time
-from PIL import image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
+import io
 import base64
 from pathlib import Path
 from src.inference import YOLOv11Inference
 from src.utils import save_metadata, load_metadata, get_unique_classes_counts
 
 sys.path.append(str(Path(__file__).parent))
+
+def img_to_base64(image : Image.Image)-> str:
+    buffered= io.BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
+
 
 def init_session_state():
     session_defaults={
@@ -22,7 +29,7 @@ def init_session_state():
         },
          "show_boxes": True,
          "grid_columns": 3,
-         "highlight_matces": True
+         "highlight_matches": True
         }
 
 
@@ -34,6 +41,63 @@ init_session_state()
 
 st.set_page_config(page_title="YOLOv11 Image Search App", layout="wide")
 st.title("Object Search Application using Computer Vision")
+
+# Custom CSS for perfect grid layout
+st.markdown(f"""
+<style>
+/* Main container adjustments */
+.st-emotion-cache-1v0mbdj {{
+    width: 100% !important;
+    height: 100% !important;
+}}
+
+/* Column container - critical for grid layout */
+.st-emotion-cache-1wrcr25 {{
+    max-width: none !important;
+    padding: 0 1rem !important;
+}}
+
+/* Individual column styling */
+.st-emotion-cache-1n76uvr {{
+    padding: 0.5rem !important;
+}}
+
+/* Image cards */
+.image-card {{
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+    margin-bottom: 20px;
+    background: #f8f9fa;
+}}
+
+.image-card:hover {{
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+}}
+
+.image-container {{
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+}}
+
+.image-container img {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}}
+
+.meta-overlay {{
+    padding: 10px;
+    background: rgba(0,0,0,0.85);
+    color: white;
+    font-size: 13px;
+    line-height: 1.4;
+}}
+</style>
+""", unsafe_allow_html=True)
 
 
 ##  options--
@@ -157,7 +221,7 @@ if st.session_state.search_results:
                 "Grid Columns",
                 min_value=2,
                 max_value=6,
-                value=st.select_state.grid_columns
+                value=st.session_state.grid_columns
             )
         with cols[2]:
             st.session_state.highlight_matches= st.checkbox(
@@ -172,50 +236,67 @@ if st.session_state.search_results:
 
     for result in results:
         with grid_cols[col_index]:
-            try:
-                img= Image.open(result["image_path"])
-                draw=ImaegDraw(img)
+                try:
+                    img= Image.open(result["image_path"])
+                    draw=ImageDraw.Draw(img)
 
-                if st.session_state.show_boxes:
-                    try:
-                        font= ImageFont.truetype("arial.ttf", 12)
-                    except:
-                        font= ImageFont.load_default()
-                for det in result ['detections']:
-                    cls= det['class']
-                    bbox= det['box']
+                    if st.session_state.show_boxes:
+                        try:
+                            font= ImageFont.truetype("arial.ttf", 12)
+                        except:
+                            font= ImageFont.load_default()
+                        for det in result ['detections']:
+                            cls= det['class']
+                            bbox= det['bbox']
 
-                    if cls in search_params["selected_classes"]:
-                        color= "#1222D0"
-                    elif not st.session_state.highlight_matches:
-                        color="#579612"
-                        thickess= 1
-                    else:
-                        continue
+                            if cls in search_params["selected_classes"]:
+                                color= "#1222D0"
+                                thickness= 2
+                            elif not st.session_state.highlight_matches:
+                                color="#579612"
+                                thickness= 1
+                            else:
+                                continue
 
-                    draw.rectangle(bbox, outline=color, width=thickess)
+                            draw.rectangle(bbox, outline=color, width=thickness)
 
-                    if cls in search_params["selected_classes"] or not st.session_state.highlight_matches:
-                        label= f"{cls} {det['confidence']:.2f}"
-                        text_bbox= draw.textbox((0,0), label, font=font)
-                        text_width= text_bbox[2] - text_bbox[0]
-                        text_height= text_bbox[3] - text_bbox[1]
+                            if cls in search_params["selected_classes"] or not st.session_state.highlight_matches:
+                                label= f"{cls} {det['confidence']:.2f}"
+                                text_bbox= draw.textbbox((0,0), label, font=font)
+                                text_width= text_bbox[2] - text_bbox[0]
+                                text_height= text_bbox[3] - text_bbox[1]
 
-                        draw.rectangle([bbox[0],bbox[1], bbox[0]+ text_width+8, bbox[1], text_height+4]
-                                       ,fill=color)
-                        
-                        draw.text(
-                            (bbox[0]+4, bbox[1]+2),
-                            label,
-                            fill='white',
-                            font=font
-                        )
-                        
+                                draw.rectangle(
+                                    [bbox[0], bbox[1], bbox[0] + text_width + 8, bbox[1] + text_height + 4],
+                                    fill=color
+                                )
 
-                        
+                            
+                                draw.text(
+                                    (bbox[0]+4, bbox[1]+2),
+                                    label,
+                                    fill='white',
+                                    font=font
+                                )
 
+                        meta_items = [f"{k}: {v}" for k, v in result["class_counts"].items()
+                                        if k in search_params["selected_classes"]]
+                    
 
-
-            except Exception as e:
-                st.error(f"Error displaying {result["image_path"]}: {str(e)}")
+                        # Display card
+                        st.markdown(f"""
+                        <div class="image-card">
+                            <div class="image-container">
+                                <img src="data:image/png;base64,{img_to_base64(img)}">
+                            </div>
+                            <div class="meta-overlay">
+                                <strong>{Path(result['image_path']).name}</strong><br>
+                                {", ".join(meta_items) if meta_items else "No matches"}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)   
+                             
+                except Exception as e:
+                    st.error(f"Error displaying {result['image_path']}: {str(e)}")
                 
+        col_index= (col_index+1) % st.session_state.grid_columns
