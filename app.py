@@ -255,46 +255,27 @@ if st.session_state.search_results:
             mime="application/json"
         )
 
-        # Option to include annotated images in a zip
-        include_annotated = st.checkbox("Include images (annotated with boxes)", value=True)
+        # Option to include images in a zip
+        if st.button("Prepare Images ZIP"):
+            try:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    for result in results:
+                        img_path = result["image_path"]
+                        img_name = Path(img_path).name
+                        zipf.write(img_path, arcname=img_name)
+                zip_buffer.seek(0)
 
-        def create_images_zip(results_list, annotated=True):
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for res in results_list:
-                    try:
-                        img = Image.open(res["image_path"]).convert("RGB")
-                        if annotated:
-                            draw = ImageDraw.Draw(img)
-                            try:
-                                font = ImageFont.truetype("arial.ttf", 12)
-                            except Exception:
-                                font = ImageFont.load_default()
-                            for det in res.get('detections', []):
-                                bbox = det.get('bbox')
-                                cls = det.get('class', '')
-                                color = "#1222D0" if cls in st.session_state.search_params["selected_classes"] else "#579612"
-                                draw.rectangle(bbox, outline=color, width=2)
-                                label = f"{cls} {det.get('confidence',0):.2f}"
-                                text_bbox = draw.textbbox((0,0), label, font=font)
-                                text_w = text_bbox[2] - text_bbox[0]
-                                text_h = text_bbox[3] - text_bbox[1]
-                                draw.rectangle([bbox[0], bbox[1], bbox[0] + text_w + 8, bbox[1] + text_h + 4], fill=color)
-                                draw.text((bbox[0]+4, bbox[1]+2), label, fill='white', font=font)
+                st.session_state.zip_data = zip_buffer.getvalue()
+                st.success("ZIP file prepared successfully! You can now download it below.")
+            except Exception as e:
+                st.error(f"Error preparing ZIP: {str(e)}")
 
-                        img_buffer = io.BytesIO()
-                        img.save(img_buffer, format="PNG")
-                        img_buffer.seek(0)                      
-                        filename = Path(res["image_path"]).name
-                        zf.writestr(filename, img_buffer.read())
-                    except Exception as e:
-                        print(f"Skipping {res.get('image_path')}: {e}")
-            buffer.seek(0)
-            return buffer
-
-        zip_button_label = f"Download Images (ZIP) - {datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        if st.download_button(label=zip_button_label,
-                              data=create_images_zip(results, annotated=include_annotated),
-                              file_name="matched_images.zip",
-                              mime="application/zip"):
-            st.success("ZIP prepared for download")
+        # if ZIP is ready
+        if "zip_data" in st.session_state:
+            st.download_button(
+                label="Download All Images (ZIP)",
+                data=st.session_state.zip_data,
+                file_name="search_results_images.zip",
+                mime="application/zip"
+            )
