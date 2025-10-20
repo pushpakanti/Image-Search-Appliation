@@ -42,8 +42,8 @@ def init_session_state():
 
 init_session_state()
 
-st.set_page_config(page_title="YOLOv11 Image Search App", layout="wide")
-st.title("Object Search Application using Computer Vision")
+st.set_page_config(page_title="YOLOv11 Image Search", layout="wide")
+st.title("SmartVision - Object Search Application")
 
 
 ##  options--
@@ -55,7 +55,7 @@ if option== "Process new images":
     with st.expander("process new images", expanded=True):
         col1, col2= st.columns(2)
         with col1:
-            image_dir= st.text_input("Image directory path: ", placeholder="enter the path")
+            image_dir= st.text_input("Image directory path: ", placeholder="enter path")
         with col2:
             model_path= st.text_input("Model weights path: ", "yolo11m.pt")
 
