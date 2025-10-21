@@ -1,11 +1,12 @@
 from ultralytics import YOLO
 from pathlib import Path
 from src.config import load_config
+import torch
 
 class YOLOv11Inference:
-    def __init__(self, model_name, device='cuda'):
+    def __init__(self, model_name, device=None):
         self.model = YOLO(model_name)
-        self.device = device
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
         # Loading from default.yaml
